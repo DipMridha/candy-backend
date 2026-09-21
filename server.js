@@ -8,17 +8,15 @@ app.use(cors());
 app.use(express.json());
 
 // Firebase Admin
-const serviceAccount = {
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-  privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-};
+const serviceAccount = JSON.parse(
+  process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert(serviceAccount)
 });
 
-// Main test
+// Home
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -26,7 +24,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// Firebase connection test
+// Firebase test
 app.get("/firebase-test", async (req, res) => {
   try {
     await admin.auth().listUsers(1);
