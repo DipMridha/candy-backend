@@ -452,6 +452,7 @@ app.post("/video/token", async (req, res) => {
     // -------------------------------------------------
 
     at.addGrant({
+      room: roomName,
       roomJoin: true,
       canPublish: true,
       canSubscribe: true
