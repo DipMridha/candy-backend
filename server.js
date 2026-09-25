@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
+const { AccessToken } = require("livekit-server-sdk");
 
 const app = express();
 
@@ -98,7 +99,6 @@ app.post("/find", verifyUser, async (req, res) => {
   try {
     const queueRef = db.ref("matchQueue");
 
-    // Check if this user is already waiting
     const existing = await queueRef.child(uid).once("value");
 
     if (existing.exists()) {
@@ -108,7 +108,6 @@ app.post("/find", verifyUser, async (req, res) => {
       });
     }
 
-    // Get current waiting users
     const snapshot = await queueRef.once("value");
     const queue = snapshot.val() || {};
 
@@ -121,7 +120,6 @@ app.post("/find", verifyUser, async (req, res) => {
       }
     }
 
-    // Nobody available -> enter queue
     if (!otherUid) {
       await queueRef.child(uid).set({
         uid: uid,
@@ -240,6 +238,105 @@ app.post("/cancel", verifyUser, async (req, res) => {
     return res.status(500).json({
       status: "error",
       message: error.message
+    });
+  }
+});
+
+// =====================================================
+// LIVEKIT VIDEO TOKEN
+// =====================================================
+
+app.post("/video/token", async (req, res) => {
+  try {
+    const {
+      roomName,
+      userId,
+      username
+    } = req.body;
+
+    console.log(
+      `[LiveKit] Token request: room=${roomName}, user=${userId}`
+    );
+
+    // Validate request
+    if (!roomName || !userId) {
+      return res.status(400).json({
+        success: false,
+        error: "roomName and userId are required"
+      });
+    }
+
+    // Read Render environment variables
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const livekitUrl = process.env.LIVEKIT_URL;
+
+    // Validate configuration
+    if (!apiKey || !apiSecret || !livekitUrl) {
+      console.error(
+        "[LiveKit] Missing required environment variables"
+      );
+
+      return res.status(500).json({
+        success: false,
+        error: "LiveKit server configuration missing"
+      });
+    }
+
+    // LIVEKIT_URL must use WebSocket protocol
+    if (
+      !livekitUrl.startsWith("wss://") &&
+      !livekitUrl.startsWith("ws://")
+    ) {
+      console.error(
+        "[LiveKit] LIVEKIT_URL must start with wss://"
+      );
+
+      return res.status(500).json({
+        success: false,
+        error: "Invalid LIVEKIT_URL configuration"
+      });
+    }
+
+    // Generate real LiveKit access token
+    const at = new AccessToken(
+      apiKey,
+      apiSecret,
+      {
+        identity: userId,
+        name: username || "Candy User",
+        ttl: "10m"
+      }
+    );
+
+    at.addGrant({
+      room: roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true
+    });
+
+    const token = await at.toJwt();
+
+    console.log(
+      `[LiveKit] Token generated successfully for user=${userId}, room=${roomName}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      token: token,
+      serverUrl: livekitUrl
+    });
+
+  } catch (error) {
+    console.error(
+      "[LiveKit] Token generation error:",
+      error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: "Failed to generate LiveKit token"
     });
   }
 });
