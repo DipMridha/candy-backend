@@ -8,25 +8,43 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// Firebase Admin
-// ===============================
+// =====================================================
+// FIREBASE ADMIN
+// =====================================================
 
-const serviceAccount = JSON.parse(
-  process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-);
+const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+if (!serviceAccountJson) {
+  console.error(
+    "[Firebase] FIREBASE_SERVICE_ACCOUNT_JSON is missing"
+  );
+  process.exit(1);
+}
+
+let serviceAccount;
+
+try {
+  serviceAccount = JSON.parse(serviceAccountJson);
+} catch (error) {
+  console.error(
+    "[Firebase] Invalid FIREBASE_SERVICE_ACCOUNT_JSON:",
+    error.message
+  );
+  process.exit(1);
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://candy-diprima-default-rtdb.firebaseio.com"
+  databaseURL:
+    "https://candy-diprima-default-rtdb.firebaseio.com"
 });
 
 const db = admin.database();
 const auth = admin.auth();
 
-// ===============================
-// Firebase Auth middleware
-// ===============================
+// =====================================================
+// FIREBASE AUTH MIDDLEWARE
+// =====================================================
 
 async function verifyUser(req, res, next) {
   try {
@@ -40,13 +58,14 @@ async function verifyUser(req, res, next) {
     }
 
     const token = header.substring(7);
+
     const decoded = await auth.verifyIdToken(token);
 
     req.uid = decoded.uid;
 
     next();
   } catch (error) {
-    console.error("Auth error:", error);
+    console.error("[Auth] Verification error:", error.message);
 
     return res.status(401).json({
       status: "error",
@@ -55,9 +74,9 @@ async function verifyUser(req, res, next) {
   }
 }
 
-// ===============================
-// Home
-// ===============================
+// =====================================================
+// HOME
+// =====================================================
 
 app.get("/", (req, res) => {
   res.json({
@@ -66,22 +85,25 @@ app.get("/", (req, res) => {
   });
 });
 
-// ===============================
-// Firebase test
-// ===============================
+// =====================================================
+// FIREBASE TEST
+// =====================================================
 
 app.get("/firebase-test", async (req, res) => {
   try {
     await auth.listUsers(1);
 
-    res.json({
+    return res.json({
       status: "ok",
       firebase: "connected"
     });
   } catch (error) {
-    console.error("Firebase error:", error);
+    console.error(
+      "[Firebase] Connection error:",
+      error.message
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       status: "error",
       firebase: "connection failed",
       message: error.message
@@ -89,9 +111,9 @@ app.get("/firebase-test", async (req, res) => {
   }
 });
 
-// ===============================
+// =====================================================
 // FIND CHAT
-// ===============================
+// =====================================================
 
 app.post("/find", verifyUser, async (req, res) => {
   const uid = req.uid;
@@ -99,8 +121,11 @@ app.post("/find", verifyUser, async (req, res) => {
   try {
     const queueRef = db.ref("matchQueue");
 
-    const existing = await queueRef.child(uid).once("value");
+    const existing = await queueRef
+      .child(uid)
+      .once("value");
 
+    // Already waiting
     if (existing.exists()) {
       return res.json({
         status: "waiting",
@@ -120,11 +145,16 @@ app.post("/find", verifyUser, async (req, res) => {
       }
     }
 
+    // =================================================
+    // NO PARTNER FOUND
+    // =================================================
+
     if (!otherUid) {
       await queueRef.child(uid).set({
         uid: uid,
         status: "waiting",
-        createdAt: admin.database.ServerValue.TIMESTAMP
+        createdAt:
+          admin.database.ServerValue.TIMESTAMP
       });
 
       return res.json({
@@ -133,18 +163,28 @@ app.post("/find", verifyUser, async (req, res) => {
       });
     }
 
-    // ===============================
+    // =================================================
     // MATCH FOUND
-    // ===============================
+    // =================================================
 
-    const matchId = db.ref("matches").push().key;
+    const matchId = db
+      .ref("matches")
+      .push()
+      .key;
+
+    if (!matchId) {
+      throw new Error(
+        "Unable to generate match ID"
+      );
+    }
 
     const matchData = {
       matchId: matchId,
       user1: otherUid,
       user2: uid,
       status: "matched",
-      createdAt: admin.database.ServerValue.TIMESTAMP
+      createdAt:
+        admin.database.ServerValue.TIMESTAMP
     };
 
     const updates = {};
@@ -169,7 +209,7 @@ app.post("/find", verifyUser, async (req, res) => {
     await db.ref().update(updates);
 
     console.log(
-      `MATCH CREATED: ${otherUid} <-> ${uid} | ${matchId}`
+      `[MATCH] CREATED: ${otherUid} <-> ${uid} | ${matchId}`
     );
 
     return res.json({
@@ -179,7 +219,10 @@ app.post("/find", verifyUser, async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Find error:", error);
+    console.error(
+      "[MATCH] Find error:",
+      error.message
+    );
 
     return res.status(500).json({
       status: "error",
@@ -188,59 +231,75 @@ app.post("/find", verifyUser, async (req, res) => {
   }
 });
 
-// ===============================
+// =====================================================
 // MATCH STATUS
-// ===============================
+// =====================================================
 
-app.get("/match-status", verifyUser, async (req, res) => {
-  const uid = req.uid;
+app.get(
+  "/match-status",
+  verifyUser,
+  async (req, res) => {
+    const uid = req.uid;
 
-  try {
-    const snapshot = await db
-      .ref(`userMatches/${uid}`)
-      .once("value");
+    try {
+      const snapshot = await db
+        .ref(`userMatches/${uid}`)
+        .once("value");
 
-    if (!snapshot.exists()) {
-      return res.json({
-        status: "none"
+      if (!snapshot.exists()) {
+        return res.json({
+          status: "none"
+        });
+      }
+
+      return res.json(snapshot.val());
+
+    } catch (error) {
+      console.error(
+        "[MATCH] Status error:",
+        error.message
+      );
+
+      return res.status(500).json({
+        status: "error",
+        message: error.message
       });
     }
-
-    return res.json(snapshot.val());
-
-  } catch (error) {
-    console.error("Match status error:", error);
-
-    return res.status(500).json({
-      status: "error",
-      message: error.message
-    });
   }
-});
+);
 
-// ===============================
+// =====================================================
 // CANCEL FIND
-// ===============================
+// =====================================================
 
-app.post("/cancel", verifyUser, async (req, res) => {
-  const uid = req.uid;
+app.post(
+  "/cancel",
+  verifyUser,
+  async (req, res) => {
+    const uid = req.uid;
 
-  try {
-    await db.ref(`matchQueue/${uid}`).remove();
+    try {
+      await db
+        .ref(`matchQueue/${uid}`)
+        .remove();
 
-    return res.json({
-      status: "cancelled"
-    });
+      return res.json({
+        status: "cancelled"
+      });
 
-  } catch (error) {
-    console.error("Cancel error:", error);
+    } catch (error) {
+      console.error(
+        "[MATCH] Cancel error:",
+        error.message
+      );
 
-    return res.status(500).json({
-      status: "error",
-      message: error.message
-    });
+      return res.status(500).json({
+        status: "error",
+        message: error.message
+      });
+    }
   }
-});
+);
 
 // =====================================================
 // LIVEKIT VIDEO TOKEN
@@ -258,47 +317,126 @@ app.post("/video/token", async (req, res) => {
       `[LiveKit] Token request: room=${roomName}, user=${userId}`
     );
 
+    // -------------------------------------------------
     // Validate request
+    // -------------------------------------------------
+
     if (!roomName || !userId) {
       return res.status(400).json({
         success: false,
-        error: "roomName and userId are required"
+        error:
+          "roomName and userId are required"
       });
     }
 
-    // Read Render environment variables
-    const apiKey = process.env.LIVEKIT_API_KEY;
-    const apiSecret = process.env.LIVEKIT_API_SECRET;
-    const livekitUrl = process.env.LIVEKIT_URL;
+    // -------------------------------------------------
+    // Read environment variables
+    // -------------------------------------------------
 
-    // Validate configuration
+    const apiKey =
+      process.env.LIVEKIT_API_KEY;
+
+    const apiSecret =
+      process.env.LIVEKIT_API_SECRET;
+
+    const livekitUrl =
+      process.env.LIVEKIT_URL;
+
+    // -------------------------------------------------
+    // Validate environment variables
+    // -------------------------------------------------
+
     if (!apiKey || !apiSecret || !livekitUrl) {
       console.error(
-        "[LiveKit] Missing required environment variables"
+        "[LiveKit] Missing environment variables"
+      );
+
+      console.error(
+        `[LiveKit] API_KEY exists: ${Boolean(apiKey)}`
+      );
+
+      console.error(
+        `[LiveKit] API_SECRET exists: ${Boolean(apiSecret)}`
+      );
+
+      console.error(
+        `[LiveKit] URL exists: ${Boolean(livekitUrl)}`
       );
 
       return res.status(500).json({
         success: false,
-        error: "LiveKit server configuration missing"
+        error:
+          "LiveKit server configuration missing"
       });
     }
 
-    // LIVEKIT_URL must use WebSocket protocol
+    // -------------------------------------------------
+    // Validate WebSocket URL
+    // -------------------------------------------------
+
     if (
       !livekitUrl.startsWith("wss://") &&
       !livekitUrl.startsWith("ws://")
     ) {
       console.error(
-        "[LiveKit] LIVEKIT_URL must start with wss://"
+        "[LiveKit] Invalid LIVEKIT_URL. It must start with wss://"
       );
 
       return res.status(500).json({
         success: false,
-        error: "Invalid LIVEKIT_URL configuration"
+        error:
+          "Invalid LIVEKIT_URL configuration"
       });
     }
 
-    // Generate real LiveKit access token
+    // -------------------------------------------------
+    // Parse LiveKit hostname safely
+    // -------------------------------------------------
+
+    let livekitHostname = "unknown";
+
+    try {
+      livekitHostname =
+        new URL(livekitUrl).hostname;
+    } catch (error) {
+      console.error(
+        "[LiveKit] Invalid URL:",
+        error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        error:
+          "Invalid LIVEKIT_URL configuration"
+      });
+    }
+
+    // -------------------------------------------------
+    // Safe API key diagnostic
+    // NEVER log API secret
+    // -------------------------------------------------
+
+    const apiKeyPrefix =
+      apiKey.length >= 4
+        ? `${apiKey.substring(0, 4)}...`
+        : "****";
+
+    console.log(
+      `[CANDY_DIAGNOSTIC] LIVEKIT hostname: ${livekitHostname}`
+    );
+
+    console.log(
+      `[CANDY_DIAGNOSTIC] LIVEKIT API key prefix: ${apiKeyPrefix}`
+    );
+
+    console.log(
+      `[CANDY_DIAGNOSTIC] LIVEKIT API secret exists: ${Boolean(apiSecret)}`
+    );
+
+    // -------------------------------------------------
+    // Generate LiveKit Access Token
+    // -------------------------------------------------
+
     const at = new AccessToken(
       apiKey,
       apiSecret,
@@ -309,6 +447,10 @@ app.post("/video/token", async (req, res) => {
       }
     );
 
+    // -------------------------------------------------
+    // Room permissions
+    // -------------------------------------------------
+
     at.addGrant({
       room: roomName,
       roomJoin: true,
@@ -316,7 +458,169 @@ app.post("/video/token", async (req, res) => {
       canSubscribe: true
     });
 
+    // -------------------------------------------------
+    // Generate JWT
+    // -------------------------------------------------
+
     const token = await at.toJwt();
+
+    if (!token || typeof token !== "string") {
+      throw new Error(
+        "LiveKit SDK returned an invalid token"
+      );
+    }
+
+    // =================================================
+    // SAFE JWT DIAGNOSTICS
+    // =================================================
+
+    try {
+      const parts = token.split(".");
+
+      if (parts.length !== 3) {
+        throw new Error(
+          "Generated JWT does not have 3 parts"
+        );
+      }
+
+      const payloadJson =
+        Buffer.from(
+          parts[1],
+          "base64"
+        ).toString("utf8");
+
+      const payload =
+        JSON.parse(payloadJson);
+
+      const issuerMatches =
+        payload.iss === apiKey;
+
+      const subjectMatches =
+        payload.sub === userId;
+
+      const grant =
+        payload.video || {};
+
+      const roomMatches =
+        grant.room === roomName;
+
+      const expiration =
+        Number(payload.exp || 0);
+
+      const currentTime =
+        Math.floor(Date.now() / 1000);
+
+      const expirationValid =
+        expiration > currentTime;
+
+      console.log(
+        "=============================================="
+      );
+
+      console.log(
+        "[CANDY_DIAGNOSTIC] LIVEKIT TOKEN"
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] URL hostname: ${livekitHostname}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] JWT issuer matches API key: ${issuerMatches}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] JWT subject matches userId: ${subjectMatches}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] JWT exp valid: ${expirationValid}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] Requested room: ${roomName}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] JWT grant room matches: ${roomMatches}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] roomJoin: ${grant.roomJoin}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] canPublish: ${grant.canPublish}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] canSubscribe: ${grant.canSubscribe}`
+      );
+
+      console.log(
+        `[CANDY_DIAGNOSTIC] JWT token generated: true`
+      );
+
+      console.log(
+        "=============================================="
+      );
+
+      // -------------------------------------------------
+      // Detect malformed token configuration
+      // -------------------------------------------------
+
+      if (!issuerMatches) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] CRITICAL: JWT issuer does NOT match LIVEKIT_API_KEY."
+        );
+      }
+
+      if (!subjectMatches) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] CRITICAL: JWT subject does NOT match requested userId."
+        );
+      }
+
+      if (!expirationValid) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] CRITICAL: JWT expiration is invalid or already expired."
+        );
+      }
+
+      if (!roomMatches) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] CRITICAL: JWT room does NOT match requested room."
+        );
+      }
+
+      if (grant.roomJoin !== true) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] CRITICAL: roomJoin is not true."
+        );
+      }
+
+      if (grant.canPublish !== true) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] WARNING: canPublish is not true."
+        );
+      }
+
+      if (grant.canSubscribe !== true) {
+        console.error(
+          "[CANDY_DIAGNOSTIC] WARNING: canSubscribe is not true."
+        );
+      }
+
+    } catch (diagnosticError) {
+      console.error(
+        "[CANDY_DIAGNOSTIC] JWT decode error:",
+        diagnosticError.message
+      );
+    }
+
+    // =================================================
+    // SEND TOKEN TO ANDROID
+    // =================================================
 
     console.log(
       `[LiveKit] Token generated successfully for user=${userId}, room=${roomName}`
@@ -336,17 +640,25 @@ app.post("/video/token", async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      error: "Failed to generate LiveKit token"
+      error:
+        "Failed to generate LiveKit token"
     });
   }
 });
 
-// ===============================
+// =====================================================
 // SERVER
-// ===============================
+// =====================================================
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+  process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Candy backend running on port ${PORT}`);
+  console.log(
+    `Candy backend running on port ${PORT}`
+  );
+
+  console.log(
+    `[LiveKit] Token endpoint: /video/token`
+  );
 });
